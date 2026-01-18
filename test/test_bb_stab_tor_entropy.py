@@ -119,3 +119,20 @@ def test_entanglement_entropy_partial_pure_state() -> None:
     assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [0, 1, 2]) == 1
     assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [0, 1]) == 0
     assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [2]) == 1
+
+
+def test_entanglement_entropy_z1z3_plus_z2() -> None:
+    stabilizer_matrix = np.array(
+        [
+            [0, 0, 0, 1, 0, 1],
+            [0, 0, 0, 0, 1, 0],
+        ],
+        dtype=np.uint8,
+    )
+    assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [0]) == 1
+    assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [1]) == 0
+    assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [2]) == 1
+    assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [0, 2]) == 1
+    assert entanglement_entropy_from_stabilizer_matrix(stabilizer_matrix, [0, 1, 2]) == 1
+    assert mutual_information_from_stabilizer_matrix(stabilizer_matrix, [0], [2]) == 1
+    assert mutual_information_from_stabilizer_matrix(stabilizer_matrix, [0], [1]) == 0

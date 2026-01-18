@@ -22,6 +22,10 @@ import sympy as sp
 
 import pytest
 
+from minimal_ann_theory_logicalX import orthogonalize_logical_x_matrix
+from minimal_ann_matrix import _monomial_basis, vector_to_poly
+from minimal_ann_theory_logicalX import pair_css_logicals_from_polynomials
+
 x, y = sp.symbols("x y")
 
 
@@ -202,6 +206,72 @@ def _stabilizer_rank_for_qubits_matrix(
     return int(mod2.rank(sub))
 
 
+def _stabilizer_matrix_commutes(stabilizer_matrix: np.ndarray) -> bool:
+    """Return True if all generators commute under the symplectic product."""
+    mat, total_qubits = _normalize_stabilizer_matrix(stabilizer_matrix)
+    if mat.size == 0:
+        return True
+    x = mat[:, :total_qubits]
+    z = mat[:, total_qubits:]
+    sym = (x @ z.T + z @ x.T) % 2
+    return bool(np.all(sym == 0))
+
+
+def _find_noncommuting_xz_pairs(
+    logicals_x: np.ndarray, logicals_z: np.ndarray
+) -> List[Tuple[int, int]]:
+    """Return (x_index, z_index) pairs that anticommute."""
+    x_u = _matrix_to_uint8(logicals_x)
+    z_u = _matrix_to_uint8(logicals_z)
+    if x_u.shape[1] != z_u.shape[1]:
+        raise ValueError("logicals_x/logicals_z must match number of qubits")
+    pairs: List[Tuple[int, int]] = []
+    for i in range(x_u.shape[0]):
+        for j in range(z_u.shape[0]):
+            if int((x_u[i] @ z_u[j].T) % 2):
+                pairs.append((i, j))
+    return pairs
+
+
+def _logical_commutation_matrix(
+    logicals_x: np.ndarray, logicals_z: np.ndarray
+) -> np.ndarray:
+    """Return commutation matrix M_ij = <X_i, Z_j> mod 2."""
+    x_u = _matrix_to_uint8(logicals_x)
+    z_u = _matrix_to_uint8(logicals_z)
+    if x_u.shape[1] != z_u.shape[1]:
+        raise ValueError("logicals_x/logicals_z must match number of qubits")
+    comm = np.zeros((x_u.shape[0], z_u.shape[0]), dtype=np.uint8)
+    for i in range(x_u.shape[0]):
+        for j in range(z_u.shape[0]):
+            comm[i, j] = int((x_u[i] @ z_u[j].T) % 2)
+    return comm
+
+
+def _logical_pairing(
+    logicals_x: np.ndarray, logicals_z: np.ndarray
+) -> Tuple[List[Tuple[int, int]], List[Tuple[int, List[int]]], List[Tuple[int, List[int]]]]:
+    """Return unique X/Z pairs plus ambiguous X and Z rows."""
+    comm = _logical_commutation_matrix(logicals_x, logicals_z)
+    x_ambiguous: List[Tuple[int, List[int]]] = []
+    z_ambiguous: List[Tuple[int, List[int]]] = []
+    pairs: List[Tuple[int, int]] = []
+
+    for i in range(comm.shape[0]):
+        js = [j for j in range(comm.shape[1]) if comm[i, j] == 1]
+        if len(js) == 1:
+            pairs.append((i, js[0]))
+        else:
+            x_ambiguous.append((i, js))
+
+    for j in range(comm.shape[1]):
+        is_ = [i for i in range(comm.shape[0]) if comm[i, j] == 1]
+        if len(is_) != 1:
+            z_ambiguous.append((j, is_))
+
+    return pairs, x_ambiguous, z_ambiguous
+
+
 def _normalize_subsystem(subsystem: Sequence[int], num_qubits: int) -> np.ndarray:
     """Return a sorted, unique, validated numpy array of qubit indices."""
     if isinstance(subsystem, np.ndarray) and subsystem.dtype == np.bool_:
@@ -253,6 +323,19 @@ def logical_vector_from_polynomial_pair(
     return (vec_f + vec_g) % 2
 
 
+def _vector_to_poly_pair(
+    vector: np.ndarray, monomials: Sequence[sp.Expr], l: int, m: int
+) -> Tuple[sp.Expr, sp.Expr]:
+    """Convert a 2*l*m vector into a polynomial pair (block0, block1)."""
+    block_size = l * m
+    vec = vector.astype(np.uint8, copy=False)
+    if vec.size != 2 * block_size:
+        raise ValueError("Vector length does not match 2*l*m")
+    poly_a = vector_to_poly(vec[:block_size], list(monomials))
+    poly_b = vector_to_poly(vec[block_size:], list(monomials))
+    return poly_a, poly_b
+
+
 def logicals_from_polynomial_pairs(
     pairs: Union[Sequence[Sequence[object]], Sequence[object]],
     l: int,
@@ -298,19 +381,19 @@ def logicals_from_polynomial_pairs(
     raise ValueError("pauli must be 'X' or 'Z'")
 
 
-# def entanglement_entropy(
-#     tableau: stim.Tableau,
-#     subsystem: Sequence[int],
-# ) -> int:
-#     """Return S(A) = rank(G_A_bar) - |A_bar| in bits."""
-#     stabilizers = tableau.to_stabilizers()
-#     num_qubits = len(stabilizers)
-#     qubits = _normalize_subsystem(subsystem, num_qubits)
-#     if qubits.size == 0 or qubits.size == num_qubits:
-#         return 0
-#     complement = np.setdiff1d(np.arange(num_qubits), qubits, assume_unique=True)
-#     rank = _stabilizer_rank_for_qubits(stabilizers, complement)
-#     return int(rank - complement.size)
+def entanglement_entropy(
+    tableau: stim.Tableau,
+    subsystem: Sequence[int],
+) -> int:
+    """Return S(A) = rank(G_A_bar) - |A_bar| in bits."""
+    stabilizers = tableau.to_stabilizers()
+    num_qubits = len(stabilizers)
+    qubits = _normalize_subsystem(subsystem, num_qubits)
+    if qubits.size == 0 or qubits.size == num_qubits:
+        return 0
+    complement = np.setdiff1d(np.arange(num_qubits), qubits, assume_unique=True)
+    rank = _stabilizer_rank_for_qubits(stabilizers, complement)
+    return int(rank - complement.size)
 
 
 # def entanglement_entropy_from_stabilizers(
@@ -344,37 +427,13 @@ def entanglement_entropy_from_stabilizer_matrix(
     *,
     num_qubits: Optional[int] = None,
 ) -> int:
-    """Return S(A) = rank(G_A_bar) - |A_bar| in bits from r x 2n matrix."""
+    """Return S(A) = rank(G_A_bar) - |A_bar| + (n - rank(S))  in bits from r x 2n matrix."""
     mat, total_qubits = _normalize_stabilizer_matrix(stabilizer_matrix, num_qubits=num_qubits)
     qubits = _normalize_subsystem(subsystem, total_qubits)
     complement = np.setdiff1d(np.arange(total_qubits), qubits, assume_unique=True)
     stab_part_rank = _stabilizer_rank_for_qubits_matrix(mat, complement, num_qubits=total_qubits)
     stab_rank = mod2.rank(stabilizer_matrix)
     return int(stab_part_rank - complement.size + total_qubits - stab_rank)
-
-
-# def mutual_information_from_stabilizers(
-#     stabilizers: Sequence[stim.PauliString],
-#     region_a: Sequence[int],
-#     region_b: Sequence[int],
-#     *,
-#     num_qubits: Optional[int] = None,
-# ) -> int:
-#     """Return I(A:B) = S(A) + S(B) - S(AB) in bits from generators."""
-#     if stabilizers:
-#         xs, _ = stabilizers[0].to_numpy()
-#         total_qubits = int(xs.size)
-#     else:
-#         if num_qubits is None:
-#             raise ValueError("num_qubits must be provided when stabilizers is empty")
-#         total_qubits = int(num_qubits)
-#     a = _normalize_subsystem(region_a, total_qubits)
-#     b = _normalize_subsystem(region_b, total_qubits)
-#     ab = np.union1d(a, b)
-#     s_a = entanglement_entropy_from_stabilizers(stabilizers, a, num_qubits=total_qubits)
-#     s_b = entanglement_entropy_from_stabilizers(stabilizers, b, num_qubits=total_qubits)
-#     s_ab = entanglement_entropy_from_stabilizers(stabilizers, ab, num_qubits=total_qubits)
-#     return int(s_a + s_b - s_ab)
 
 
 def mutual_information_from_stabilizer_matrix(
@@ -392,32 +451,9 @@ def mutual_information_from_stabilizer_matrix(
     s_a = entanglement_entropy_from_stabilizer_matrix(mat, a, num_qubits=total_qubits)
     s_b = entanglement_entropy_from_stabilizer_matrix(mat, b, num_qubits=total_qubits)
     s_ab = entanglement_entropy_from_stabilizer_matrix(mat, ab, num_qubits=total_qubits)
+    # print(f"s_a={s_a}, s_b={s_b}, s_ab={s_ab}")
+
     return int(s_a + s_b - s_ab)
-
-
-# def coherent_information_from_stabilizers(
-#     stabilizers: Sequence[stim.PauliString],
-#     reference: Sequence[int],
-#     region_a: Sequence[int],
-#     *,
-#     num_qubits: Optional[int] = None,
-# ) -> int:
-#     """Return I_c(R>A) = S(A) - S(RA) in bits from generators."""
-#     if stabilizers:
-#         xs, _ = stabilizers[0].to_numpy()
-#         total_qubits = int(xs.size)
-#     else:
-#         if num_qubits is None:
-#             raise ValueError("num_qubits must be provided when stabilizers is empty")
-#         total_qubits = int(num_qubits)
-#     r = _normalize_subsystem(reference, total_qubits)
-#     a = _normalize_subsystem(region_a, total_qubits)
-#     if np.intersect1d(r, a).size:
-#         raise ValueError("reference and region_a must be disjoint")
-#     ra = np.union1d(r, a)
-#     s_a = entanglement_entropy_from_stabilizers(stabilizers, a, num_qubits=total_qubits)
-#     s_ra = entanglement_entropy_from_stabilizers(stabilizers, ra, num_qubits=total_qubits)
-#     return int(s_a - s_ra)
 
 
 def coherent_information_from_stabilizer_matrix(
@@ -437,36 +473,6 @@ def coherent_information_from_stabilizer_matrix(
     s_a = entanglement_entropy_from_stabilizer_matrix(mat, a, num_qubits=total_qubits)
     s_ra = entanglement_entropy_from_stabilizer_matrix(mat, ra, num_qubits=total_qubits)
     return int(s_a - s_ra)
-
-
-# def synergy_from_stabilizers(
-#     stabilizers: Sequence[stim.PauliString],
-#     reference: Sequence[int],
-#     region_a: Sequence[int],
-#     region_b: Sequence[int],
-#     *,
-#     num_qubits: Optional[int] = None,
-# ) -> int:
-#     """Return Sigma = I(R:AB) - max(I(R:A), I(R:B)) in bits from generators."""
-#     if stabilizers:
-#         xs, _ = stabilizers[0].to_numpy()
-#         total_qubits = int(xs.size)
-#     else:
-#         if num_qubits is None:
-#             raise ValueError("num_qubits must be provided when stabilizers is empty")
-#         total_qubits = int(num_qubits)
-#     r = _normalize_subsystem(reference, total_qubits)
-#     a = _normalize_subsystem(region_a, total_qubits)
-#     b = _normalize_subsystem(region_b, total_qubits)
-#     if np.intersect1d(r, a).size or np.intersect1d(r, b).size:
-#         raise ValueError("reference must be disjoint from region_a and region_b")
-#     if np.intersect1d(a, b).size:
-#         raise ValueError("region_a and region_b must be disjoint")
-#     ab = np.union1d(a, b)
-#     i_rab = mutual_information_from_stabilizers(stabilizers, r, ab, num_qubits=total_qubits)
-#     i_ra = mutual_information_from_stabilizers(stabilizers, r, a, num_qubits=total_qubits)
-#     i_rb = mutual_information_from_stabilizers(stabilizers, r, b, num_qubits=total_qubits)
-#     return int(i_rab - max(i_ra, i_rb))
 
 
 def synergy_from_stabilizer_matrix(
@@ -491,64 +497,6 @@ def synergy_from_stabilizer_matrix(
     i_ra = mutual_information_from_stabilizer_matrix(mat, r, a, num_qubits=total_qubits)
     i_rb = mutual_information_from_stabilizer_matrix(mat, r, b, num_qubits=total_qubits)
     return int(i_rab - max(i_ra, i_rb))
-
-
-# def mutual_information(
-#     tableau: stim.Tableau,
-#     region_a: Sequence[int],
-#     region_b: Sequence[int],
-# ) -> int:
-#     """Return I(A:B) = S(A) + S(B) - S(AB) in bits."""
-#     stabilizers = tableau.to_stabilizers()
-#     num_qubits = len(stabilizers)
-#     a = _normalize_subsystem(region_a, num_qubits)
-#     b = _normalize_subsystem(region_b, num_qubits)
-#     ab = np.union1d(a, b)
-#     s_a = entanglement_entropy(tableau, a)
-#     s_b = entanglement_entropy(tableau, b)
-#     s_ab = entanglement_entropy(tableau, ab)
-#     return int(s_a + s_b - s_ab)
-
-
-# def coherent_information(
-#     tableau: stim.Tableau,
-#     reference: Sequence[int],
-#     region_a: Sequence[int],
-# ) -> int:
-#     """Return I_c(R>A) = S(A) - S(RA) in bits."""
-#     stabilizers = tableau.to_stabilizers()
-#     num_qubits = len(stabilizers)
-#     r = _normalize_subsystem(reference, num_qubits)
-#     a = _normalize_subsystem(region_a, num_qubits)
-#     if np.intersect1d(r, a).size:
-#         raise ValueError("reference and region_a must be disjoint")
-#     ra = np.union1d(r, a)
-#     s_a = entanglement_entropy(tableau, a)
-#     s_ra = entanglement_entropy(tableau, ra)
-#     return int(s_a - s_ra)
-
-
-# def synergy(
-#     tableau: stim.Tableau,
-#     reference: Sequence[int],
-#     region_a: Sequence[int],
-#     region_b: Sequence[int],
-# ) -> int:
-#     """Return Sigma = I(R:AB) - max(I(R:A), I(R:B)) in bits."""
-#     stabilizers = tableau.to_stabilizers()
-#     num_qubits = len(stabilizers)
-#     r = _normalize_subsystem(reference, num_qubits)
-#     a = _normalize_subsystem(region_a, num_qubits)
-#     b = _normalize_subsystem(region_b, num_qubits)
-#     if np.intersect1d(r, a).size or np.intersect1d(r, b).size:
-#         raise ValueError("reference must be disjoint from region_a and region_b")
-#     if np.intersect1d(a, b).size:
-#         raise ValueError("region_a and region_b must be disjoint")
-#     ab = np.union1d(a, b)
-#     i_rab = mutual_information(tableau, r, ab)
-#     i_ra = mutual_information(tableau, r, a)
-#     i_rb = mutual_information(tableau, r, b)
-#     return int(i_rab - max(i_ra, i_rb))
 
 
 def bb_qubit_index(l: int, m: int, *, block: int, x: int, y: int) -> int:
@@ -759,25 +707,352 @@ __all__ = [
     "bb_qubit_index",
     "bb_subsystem_from_coords",
     "bb_rectangle_subsystem",
-    "entanglement_entropy",
-    "entanglement_entropy_from_stabilizers",
     "entanglement_entropy_from_stabilizer_matrix",
-    "mutual_information_from_stabilizers",
     "mutual_information_from_stabilizer_matrix",
-    "coherent_information_from_stabilizers",
     "coherent_information_from_stabilizer_matrix",
-    "synergy_from_stabilizers",
     "synergy_from_stabilizer_matrix",
     "kitaev_preskill_tee",
     "logical_vector_from_polynomial_pair",
     "logicals_from_polynomial_pairs",
     "multiply_periodic",
-    "mutual_information",
-    "coherent_information",
-    "synergy",
 ]
 
+from copyreg import dispatch_table
+import enum
+from turtle import st
+from bposd.css import css_code
+from numpy import block
+from bivariate_bicycle_codes import get_BB_Hx_Hz
+
+def get_entanglement_info_EPR_logical(
+    spec: BBCodeSpec,
+    hx_u: np.ndarray,
+    hz_u: np.ndarray,
+    logicals_Z: Sequence[Sequence[object]],
+    logicals_dualX: Sequence[Sequence[object]],
+    logicals_Z_others: Sequence[Sequence[object]],
+    logicals_dualX_others: Sequence[Sequence[object]],
+) -> np.ndarray:
+
+    logicals_fg_Z=logicals_Z
+    logicals_fg_X=logicals_dualX
+    # print(logicals_fg_X)
+    # print(logicals_fg_Z)
+    id_op, logicals_z = logicals_from_polynomial_pairs(
+        logicals_fg_Z,
+        spec.l,
+        spec.m,
+        pauli="Z",
+    )
+    logicals_x, _ = logicals_from_polynomial_pairs(
+        logicals_fg_X,
+        spec.l,
+        spec.m,
+        pauli="X",
+    )
+    logicals_x_others, _ = logicals_from_polynomial_pairs(
+        logicals_dualX_others,
+        spec.l,
+        spec.m,
+        pauli="X",
+    )
+    id_op_others, logicals_z_others = logicals_from_polynomial_pairs(
+        logicals_Z_others,
+        spec.l,
+        spec.m,
+        pauli="Z",
+    )
+    # print(logicals_x)
+    # print(logicals_z)
+
+    extra_qubits = np.zeros((hx_u.shape[0], 1), dtype=np.uint8)
+    # print(extra_qubits)
+    # print(hx_u)
+    hx_u_epr = np.hstack((hx_u, extra_qubits))
+    hz_u_epr = np.hstack((hz_u, extra_qubits))
+    # print(hx_u_epr)
+    # print(hz_u_epr)
+    # print(hz_u_epr.shape)
+    id_op_epr = np.hstack((id_op[0,:], np.array([0],dtype=np.uint8)))
+    logicals_x_epr = np.hstack((logicals_x[0,:], np.array([1],dtype=np.uint8)))
+    logicals_z_epr = np.hstack((logicals_z[0,:], np.array([1],dtype=np.uint8)))
+
+    
+    extra_qubits_logical_z_others = np.zeros((logicals_z_others.shape[0], 1), dtype=np.uint8)
+    logicals_z_others = np.hstack((logicals_z_others, extra_qubits_logical_z_others))
+    id_op_others = np.hstack((id_op_others, extra_qubits_logical_z_others))
+    extra_qubits_logical_x_others = np.zeros((logicals_x_others.shape[0], 1), dtype=np.uint8)
+    logicals_x_others = np.hstack((logicals_x_others, extra_qubits_logical_x_others))
+    id_op_x_others = np.zeros_like(logicals_x_others, dtype=np.uint8)
+
+    # print(np.vstack((logicals_x_epr, id_op_epr)))
+    # print(np.vstack((id_op_epr, logicals_z_epr)))
+
+    state_logicals = [
+        (
+            np.vstack((logicals_x_epr, id_op_epr)),
+            np.vstack((id_op_epr, logicals_z_epr)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_epr)),
+            np.vstack((id_op_epr, id_op_epr)),
+        ),
+        (
+            np.vstack((id_op_epr, id_op_epr)),
+            np.vstack((logicals_z_epr, id_op_epr)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_others)),
+            np.vstack((id_op_epr, logicals_z_others)),
+        ),
+        (
+            np.vstack((id_op_epr, id_op_others)),
+            np.vstack((logicals_z_epr, logicals_z_others)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_epr, id_op_others)),
+            np.vstack((id_op_epr, logicals_z_epr, logicals_z_others)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_epr, logicals_x_others)),
+            np.vstack((id_op_epr, logicals_z_epr, id_op_x_others)),
+        ),
+    ]
+
+    block0 = bb_rectangle_subsystem(
+        spec.l, spec.m, block=0, x_range=range(spec.l), y_range=range(spec.m)
+    )
+    block1 = bb_rectangle_subsystem(
+        spec.l, spec.m, block=1, x_range=range(spec.l), y_range=range(spec.m)
+    )
+    ref_Q = [2 * spec.l * spec.m]
+
+    mi_summary = np.zeros((len(state_logicals), 3), dtype=np.int64)
+    for state_index, (state_logicals_x, state_logicals_z) in enumerate(state_logicals):
+        stabilizer_matrix = _stabilizer_matrix_from_css(
+            hx_u_epr,
+            hz_u_epr,
+            logicals_x=state_logicals_x,
+            logicals_z=state_logicals_z,
+        )
+        if not _stabilizer_matrix_commutes(stabilizer_matrix):
+            non_commuting = _find_noncommuting_xz_pairs(
+                state_logicals_x, state_logicals_z
+            )
+            detail = f" non-commuting X/Z pairs: {non_commuting}" if non_commuting else ""
+            raise ValueError(
+                f"Non-commuting stabilizer generators for state type {state_index}.{detail}"
+            )
+        mi_summary[state_index, 0] = mutual_information_from_stabilizer_matrix(
+            stabilizer_matrix, block0, ref_Q
+        )
+        mi_summary[state_index, 1] = mutual_information_from_stabilizer_matrix(
+            stabilizer_matrix, block1, ref_Q
+        )
+        mi_summary[state_index, 2] = mutual_information_from_stabilizer_matrix(
+            stabilizer_matrix, block0 + block1, ref_Q
+        )
+
+    return mi_summary
+
+
+def get_entropy_info_EPR_logical(
+    spec: BBCodeSpec,
+    hx_u: np.ndarray,
+    hz_u: np.ndarray,
+    logicals_Z: Sequence[Sequence[object]],
+    logicals_dualX: Sequence[Sequence[object]],
+    logicals_Z_others: Sequence[Sequence[object]],
+    logicals_dualX_others: Sequence[Sequence[object]],
+) -> np.ndarray:
+    logicals_fg_Z = logicals_Z
+    logicals_fg_X = logicals_dualX
+    id_op, logicals_z = logicals_from_polynomial_pairs(
+        logicals_fg_Z,
+        spec.l,
+        spec.m,
+        pauli="Z",
+    )
+    logicals_x, _ = logicals_from_polynomial_pairs(
+        logicals_fg_X,
+        spec.l,
+        spec.m,
+        pauli="X",
+    )
+    logicals_x_others, _ = logicals_from_polynomial_pairs(
+        logicals_dualX_others,
+        spec.l,
+        spec.m,
+        pauli="X",
+    )
+    id_op_others, logicals_z_others = logicals_from_polynomial_pairs(
+        logicals_Z_others,
+        spec.l,
+        spec.m,
+        pauli="Z",
+    )
+
+    extra_qubits = np.zeros((hx_u.shape[0], 1), dtype=np.uint8)
+    hx_u_epr = np.hstack((hx_u, extra_qubits))
+    hz_u_epr = np.hstack((hz_u, extra_qubits))
+    id_op_epr = np.hstack((id_op[0, :], np.array([0], dtype=np.uint8)))
+    logicals_x_epr = np.hstack((logicals_x[0, :], np.array([1], dtype=np.uint8)))
+    logicals_z_epr = np.hstack((logicals_z[0, :], np.array([1], dtype=np.uint8)))
+
+    extra_qubits_logical_z_others = np.zeros((logicals_z_others.shape[0], 1), dtype=np.uint8)
+    logicals_z_others = np.hstack((logicals_z_others, extra_qubits_logical_z_others))
+    id_op_others = np.hstack((id_op_others, extra_qubits_logical_z_others))
+    extra_qubits_logical_x_others = np.zeros((logicals_x_others.shape[0], 1), dtype=np.uint8)
+    logicals_x_others = np.hstack((logicals_x_others, extra_qubits_logical_x_others))
+    id_op_x_others = np.zeros_like(logicals_x_others, dtype=np.uint8)
+
+    state_logicals = [
+        (
+            np.vstack((logicals_x_epr, id_op_epr)),
+            np.vstack((id_op_epr, logicals_z_epr)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_epr)),
+            np.vstack((id_op_epr, id_op_epr)),
+        ),
+        (
+            np.vstack((id_op_epr, id_op_epr)),
+            np.vstack((logicals_z_epr, id_op_epr)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_others)),
+            np.vstack((id_op_epr, logicals_z_others)),
+        ),
+        (
+            np.vstack((id_op_epr, id_op_others)),
+            np.vstack((logicals_z_epr, logicals_z_others)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_epr, id_op_others)),
+            np.vstack((id_op_epr, logicals_z_epr, logicals_z_others)),
+        ),
+        (
+            np.vstack((logicals_x_epr, id_op_epr, logicals_x_others)),
+            np.vstack((id_op_epr, logicals_z_epr, id_op_x_others)),
+        ),
+    ]
+
+    block0 = bb_rectangle_subsystem(
+        spec.l, spec.m, block=0, x_range=range(spec.l), y_range=range(spec.m)
+    )
+    block1 = bb_rectangle_subsystem(
+        spec.l, spec.m, block=1, x_range=range(spec.l), y_range=range(spec.m)
+    )
+    ref_Q = [2 * spec.l * spec.m]
+
+    entropy_summary = np.zeros((len(state_logicals), 7), dtype=np.int64)
+    for state_index, (state_logicals_x, state_logicals_z) in enumerate(state_logicals):
+        stabilizer_matrix = _stabilizer_matrix_from_css(
+            hx_u_epr,
+            hz_u_epr,
+            logicals_x=state_logicals_x,
+            logicals_z=state_logicals_z,
+        )
+        if not _stabilizer_matrix_commutes(stabilizer_matrix):
+            non_commuting = _find_noncommuting_xz_pairs(
+                state_logicals_x, state_logicals_z
+            )
+            detail = f" non-commuting X/Z pairs: {non_commuting}" if non_commuting else ""
+            raise ValueError(
+                f"Non-commuting stabilizer generators for state type {state_index}.{detail}"
+            )
+        entropy_summary[state_index, 0] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, ref_Q
+        )
+        entropy_summary[state_index, 1] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, ref_Q + block0
+        )
+        entropy_summary[state_index, 2] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, ref_Q + block1
+        )
+        entropy_summary[state_index, 3] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, ref_Q + block0 + block1
+        )
+        entropy_summary[state_index, 4] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, block0
+        )
+        entropy_summary[state_index, 5] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, block1
+        )
+        entropy_summary[state_index, 6] = entanglement_entropy_from_stabilizer_matrix(
+            stabilizer_matrix, block0 + block1
+        )
+
+    return entropy_summary
+
+
+def print_state_tables(
+    entries: Sequence[Tuple[str, np.ndarray]],
+    *,
+    state_labels: Optional[Sequence[str]] = None,
+) -> None:
+    state_count = entries[0][1].shape[0]
+    if state_labels is None:
+        state_labels = [f"State type {i}" for i in range(state_count)]
+    label_width = max(len("logical"), max(len(label) for label, _ in entries))
+    header = (
+        f"{'logical':<{label_width}}  {'I(R:A)':>8}  {'I(R:B)':>8}  {'I(R:AB)':>9}"
+    )
+    state_type_name = [
+        r"<S_Z, S_X, X_{L_j} X_R, Z_{L_j} Z_R>",
+        r"<S_Z, S_X, X_{L_j} X_R>",
+        r"<S_Z, S_X, Z_{L_j} Z_R>",
+        r"<S_Z, S_X, X_{L_j} X_R, \prod_{i \neq j} Z_{L_{i} >",
+        r"<S_Z, S_X, Z_{L_j} Z_R, \prod_{i \neq j} Z_{L_{i} >",
+        r"<S_Z, S_X, X_{L_j} X_R, Z_{L_j} Z_R, \prod_{i \neq j} Z_{L_{i}>",
+        r"<S_Z, S_X, X_{L_j} X_R, Z_{L_j} Z_R, \prod_{i \neq j} X_{L_i}>",
+    ]
+    for state_index in range(state_count):
+        print(f"\n{state_labels[state_index]}")
+        print(f"{state_type_name[state_index]}")
+        print(header)
+        for label, mi_summary in entries:
+            i_ra, i_rb, i_rab = mi_summary[state_index]
+            print(
+                f"{label:<{label_width}}  {i_ra:8d}  {i_rb:8d}  {i_rab:9d}"
+            )
+
+
+def print_entropy_tables(
+    entries: Sequence[Tuple[str, np.ndarray]],
+    *,
+    state_labels: Optional[Sequence[str]] = None,
+) -> None:
+    state_count = entries[0][1].shape[0]
+    if state_labels is None:
+        state_labels = [f"State type {i}" for i in range(state_count)]
+    label_width = max(len("logical"), max(len(label) for label, _ in entries))
+    header = (
+        f"{'logical':<{label_width}}  {'S(R)':>6}  {'S(RA)':>6}  {'S(RB)':>6}"
+        f"  {'S(RAB)':>7}  {'S(A)':>6}  {'S(B)':>6}  {'S(AB)':>7}"
+    )
+    state_type_name = [
+        r"<S_Z, S_X, X_{L_j} X_R, Z_{L_j} Z_R>",
+        r"<S_Z, S_X, X_{L_j} X_R>",
+        r"<S_Z, S_X, Z_{L_j} Z_R>",
+        r"<S_Z, S_X, X_{L_j} X_R, \prod_{i \neq j} Z_{L_{i} >",
+        r"<S_Z, S_X, Z_{L_j} Z_R, \prod_{i \neq j} Z_{L_{i} >",
+        r"<S_Z, S_X, X_{L_j} X_R, Z_{L_j} Z_R, \prod_{i \neq j} Z_{L_{i}>",
+        r"<S_Z, S_X, X_{L_j} X_R, Z_{L_j} Z_R, \prod_{i \neq j} X_{L_i}>",
+    ]
+    for state_index in range(state_count):
+        print(f"\n{state_labels[state_index]}")
+        print(f"{state_type_name[state_index]}")
+        print(header)
+        for label, entropy_summary in entries:
+            s_r, s_ra, s_rb, s_rab, s_a, s_b, s_ab = entropy_summary[state_index]
+            print(
+                f"{label:<{label_width}}  {s_r:6d}  {s_ra:6d}  {s_rb:6d}"
+                f"  {s_rab:7d}  {s_a:6d}  {s_b:6d}  {s_ab:7d}"
+            )
+
 if __name__ == "__main__":
+
     print("BB_stab_tor module loaded.")
 
     ##################################################
@@ -811,162 +1086,54 @@ if __name__ == "__main__":
     poly_P_dual = sp.sympify("x**5*y**3 + x**4*y**3 + x**2 + x*y**3 + y**3 + 1" )
     poly_Q_dual = sp.sympify("x**3*y**5 + x**3*y**4 + x**3*y + x**3 + y**2 + 1" )
     standard_polys = [sp.sympify("1"), sp.sympify("y"), sp.sympify("y**2"), sp.sympify("y**3"), sp.sympify("x"), sp.sympify("x*y")]
+    # standard_polys = [sp.sympify("1"), sp.sympify("y**5"), sp.sympify("y**10"), sp.sympify("y**15"), sp.sympify("x**5"), sp.sympify("x**5*y**5")]
     logicals_ann_c_dualX = [[apply_periodic_boundary(poly_P_dual * expr, l, m), 0] for expr in standard_polys]
     logicals_ann_d_dualX = [[0, apply_periodic_boundary(poly_Q_dual * expr, l, m)] for expr in standard_polys]
     poly_tor1_c_multiplier_dualX = sp.sympify("x**3*y**4 + x**2*y + x + 1")
     poly_tor1_d_multiplier_dualX = sp.sympify("x**4*y + x**3*y + x*y**5 + y**5 + y + 1")
     standard_polys_tor_dualX = [sp.sympify("1"), sp.sympify("x"), sp.sympify("x**2"), sp.sympify("x**3")]
+    # standard_polys_tor_dualX = [sp.sympify("1"), sp.sympify("x**5"), sp.sympify("x**10"), sp.sympify("x**15")]
     logicals_tor1_dualX = [[apply_periodic_boundary(poly_tor1_c_multiplier_dualX * expr, l, m), apply_periodic_boundary(poly_tor1_d_multiplier_dualX * expr, l, m)] for expr in standard_polys_tor_dualX]
 
-    logicals_all_z = logicals_ann_c + logicals_ann_d + logicals_tor1
-    logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX + logicals_tor1_dualX
+    # logicals_all_z = logicals_ann_c + logicals_ann_d + logicals_tor1
+    # logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX + logicals_tor1_dualX
 
-    print(logicals_ann_c_dualX)
+    # logicals_all_z = logicals_ann_c + logicals_ann_d[0:2] + logicals_tor1
+    # logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX[0:2] + logicals_tor1_dualX
 
-    from copyreg import dispatch_table
-    import enum
-    from turtle import st
-    from bposd.css import css_code
-    from numpy import block
-    from bivariate_bicycle_codes import get_BB_Hx_Hz
+    logicals_all_z = logicals_ann_c + logicals_ann_d[0:2] + logicals_tor1
+    logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX[0:6] + logicals_tor1_dualX
 
-    def get_entanglement_info_EPR_logical(
-        spec: BBCodeSpec,
-        hx_u: np.ndarray,
-        hz_u: np.ndarray,
-        logicals_Z: Sequence[Sequence[object]],
-        logicals_dualX: Sequence[Sequence[object]],
-        logicals_Z_others: Sequence[Sequence[object]],
-    ) -> np.ndarray:
+    # from minimal_ann_theory_logicalX import pair_css_logicals_from_polynomials
 
-        logicals_fg_Z=logicals_Z
-        logicals_fg_X=logicals_dualX
-        # print(logicals_fg_X)
-        # print(logicals_fg_Z)
-        id_op, logicals_z = logicals_from_polynomial_pairs(
-            logicals_fg_Z,
-            spec.l,
-            spec.m,
-            pauli="Z",
-        )
-        logicals_x, _ = logicals_from_polynomial_pairs(
-            logicals_fg_X,
-            spec.l,
-            spec.m,
-            pauli="X",
-        )
-        id_op_others, logicals_z_others = logicals_from_polynomial_pairs(
-            logicals_Z_others,
-            spec.l,
-            spec.m,
-            pauli="Z",
-        )
-        # print(logicals_x)
-        # print(logicals_z)
+    # paired = pair_css_logicals_from_polynomials(
+    #     f_str="x^3 + y + y^2",
+    #     g_str="y^3 + x + x^2",
+    #     l=6,
+    #     m=6,
+    # )
 
-        extra_qubits = np.zeros((hx_u.shape[0], 1), dtype=np.uint8)
-        # print(extra_qubits)
-        # print(hx_u)
-        hx_u_epr = np.hstack((hx_u, extra_qubits))
-        hz_u_epr = np.hstack((hz_u, extra_qubits))
-        # print(hx_u_epr)
-        # print(hz_u_epr)
-        # print(hz_u_epr.shape)
-        id_op_epr = np.hstack((id_op[0,:], np.array([0],dtype=np.uint8)))
-        logicals_x_epr = np.hstack((logicals_x[0,:], np.array([1],dtype=np.uint8)))
-        logicals_z_epr = np.hstack((logicals_z[0,:], np.array([1],dtype=np.uint8)))
+    # # Polynomial pairs (one-to-one)
+    # logicals_all_z = paired["z_polys"]
+    # logicals_all_dualX = paired["x_polys"]
 
-        
-        extra_qubits_logical_z_others = np.zeros((logicals_z_others.shape[0], 1), dtype=np.uint8)
-        logicals_z_others = np.hstack((logicals_z_others, extra_qubits_logical_z_others))
-        id_op_others = np.hstack((id_op_others, extra_qubits_logical_z_others))
+    all_x_raw, _ = logicals_from_polynomial_pairs(logicals_all_dualX, l, m, pauli="X")
+    _, all_z_raw = logicals_from_polynomial_pairs(logicals_all_z, l, m, pauli="Z")
+    x_orth_info = orthogonalize_logical_x_matrix(all_x_raw, all_z_raw)
 
-        # print(np.vstack((logicals_x_epr, id_op_epr)))
-        # print(np.vstack((id_op_epr, logicals_z_epr)))
+    monomials = _monomial_basis(l, m)
+    logicals_all_dualX_orth = [
+        _vector_to_poly_pair(row, monomials, l, m)
+        for row in x_orth_info["x_orthogonal"]
+    ]
+    logicals_all_dualX = logicals_all_dualX_orth
 
-        state_logicals = [
-            (
-                np.vstack((logicals_x_epr, id_op_epr)),
-                np.vstack((id_op_epr, logicals_z_epr)),
-            ),
-            (
-                np.vstack((logicals_x_epr, id_op_epr)),
-                np.vstack((id_op_epr, id_op_epr)),
-            ),
-            (
-                np.vstack((id_op_epr, id_op_epr)),
-                np.vstack((logicals_z_epr, id_op_epr)),
-            ),
-            (
-                np.vstack((logicals_x_epr, id_op_epr, id_op_others)),
-                np.vstack((id_op_epr, logicals_z_epr, logicals_z_others)),
-            ),
-            (
-                np.vstack((logicals_x_epr, id_op_others)),
-                np.vstack((id_op_epr, logicals_z_others)),
-            ),
-            (
-                np.vstack((id_op_epr, id_op_others)),
-                np.vstack((logicals_z_epr, logicals_z_others)),
-            )
-        ]
+    # print(logicals_ann_c_dualX)
+    for (i, lg) in enumerate(logicals_all_z):
+        print(f"logical Z[{i}] = {lg}")
+    for (i, lg) in enumerate(logicals_all_dualX):
+        print(f"logical X[{i}] = {lg}")
 
-        block0 = bb_rectangle_subsystem(
-            spec.l, spec.m, block=0, x_range=range(spec.l), y_range=range(spec.m)
-        )
-        block1 = bb_rectangle_subsystem(
-            spec.l, spec.m, block=1, x_range=range(spec.l), y_range=range(spec.m)
-        )
-        ref_Q = [2 * spec.l * spec.m]
-
-        mi_summary = np.zeros((len(state_logicals), 3), dtype=np.int64)
-        for state_index, (state_logicals_x, state_logicals_z) in enumerate(state_logicals):
-            stabilizer_matrix = _stabilizer_matrix_from_css(
-                hx_u_epr,
-                hz_u_epr,
-                logicals_x=state_logicals_x,
-                logicals_z=state_logicals_z,
-            )
-            mi_summary[state_index, 0] = mutual_information_from_stabilizer_matrix(
-                stabilizer_matrix, block0, ref_Q
-            )
-            mi_summary[state_index, 1] = mutual_information_from_stabilizer_matrix(
-                stabilizer_matrix, block1, ref_Q
-            )
-            mi_summary[state_index, 2] = mutual_information_from_stabilizer_matrix(
-                stabilizer_matrix, block0 + block1, ref_Q
-            )
-
-        return mi_summary
-
-
-    def print_state_tables(
-        entries: Sequence[Tuple[str, np.ndarray]],
-        *,
-        state_labels: Optional[Sequence[str]] = None,
-    ) -> None:
-        state_count = entries[0][1].shape[0]
-        if state_labels is None:
-            state_labels = [f"State type {i}" for i in range(state_count)]
-        label_width = max(len("logical"), max(len(label) for label, _ in entries))
-        header = (
-            f"{'logical':<{label_width}}  {'I(R:A)':>8}  {'I(R:B)':>8}  {'I(R:AB)':>9}"
-        )
-        state_type_name = [r"<X_{L_j} X_R, Z_{L_j} Z_R>",
-                           r"<X_{L_j} X_R>",
-                           r"<Z_{L_j} Z_R>",
-                           r"<X_{L_j} X_R, Z_{L_j} Z_R, \prod_{i \neq j} Z_{L_{i}>",
-                           r"<X_{L_j} X_R, \prod_{i \neq j} Z_{L_{i} >",
-                           r"<Z_{L_j} Z_R, \prod_{i \neq j} Z_{L_{i} >"]
-        for state_index in range(state_count):
-            print(f"\n{state_labels[state_index]}")
-            print(f"{state_type_name[state_index]}")
-            print(header)
-            for label, mi_summary in entries:
-                i_ra, i_rb, i_rab = mi_summary[state_index]
-                print(
-                    f"{label:<{label_width}}  {i_ra:8d}  {i_rb:8d}  {i_rab:9d}"
-                )
 
 
     spec = BBCodeSpec(a_poly=a_terms, b_poly=b_terms, l=l, m=m)
@@ -977,14 +1144,43 @@ if __name__ == "__main__":
     hz_u = _matrix_to_uint8(code.hz)
     total_qubits = hx_u.shape[1]
 
+    all_x, _ = logicals_from_polynomial_pairs(logicals_all_dualX, l, m, pauli="X")
+    _, all_z = logicals_from_polynomial_pairs(logicals_all_z, l, m, pauli="Z")
+    x_orth_info = orthogonalize_logical_x_matrix(all_x, all_z)
+    x_pairing_basis = (
+        x_orth_info["x_orthogonal"]
+        if x_orth_info["x_orthogonal"].size
+        else all_x
+    )
+    print("orthogonal X dimension:", x_orth_info["x_orthogonal"].shape[0])
+    print("rank_commutation:", x_orth_info["rank_commutation"])
+    # print(x_pairing_basis)
+    pairs, x_ambiguous, z_ambiguous = _logical_pairing(x_pairing_basis, all_z)
+    comm = _logical_commutation_matrix(all_x, all_z)
+    print(comm)
+    if pairs:
+        print("\nLogical X/Z pairing (unique):")
+        for x_idx, z_idx in pairs:
+            print(f"  X {x_idx} <-> Z {z_idx}")
+    if x_ambiguous:
+        print("\nLogical X with non-unique partners:")
+        for x_idx, z_indices in x_ambiguous:
+            print(f"  X {x_idx}: {z_indices}")
+    if z_ambiguous:
+        print("\nLogical Z with non-unique partners:")
+        for z_idx, x_indices in z_ambiguous:
+            print(f"  Z {z_idx}: {x_indices}")
+
 
         # Verify entanglement entropy calculations
     total_logicals = len(logicals_all_z)
     logical_entries: List[Tuple[str, np.ndarray]] = []
+    entropy_entries: List[Tuple[str, np.ndarray]] = []
 
     mi_ann_c = []
-    for i in range(len(logicals_ann_c)):
+    for i in range(len(logicals_all_z)):
         logicals_z_others = [logicals_all_z[j] for j in range(total_logicals) if j != i]
+        logicals_x_others = [logicals_all_dualX[j] for j in range(total_logicals) if j != i]
         mi_summary = get_entanglement_info_EPR_logical(
             spec,
             hx_u,
@@ -992,43 +1188,20 @@ if __name__ == "__main__":
             logicals_all_z[i],
             logicals_all_dualX[i],
             logicals_z_others,
+            logicals_x_others,
+        )
+        entropy_summary = get_entropy_info_EPR_logical(
+            spec,
+            hx_u,
+            hz_u,
+            logicals_all_z[i],
+            logicals_all_dualX[i],
+            logicals_z_others,
+            logicals_x_others,
         )
         mi_ann_c.append(mi_summary)
-        logical_entries.append((f"ann_c_{i}", mi_summary))
-    ann_d_offset = len(logicals_ann_c)
-    mi_ann_d = []
-    for i in range(len(logicals_ann_d)):
-        logical_index = ann_d_offset + i
-        logicals_z_others = [
-            logicals_all_z[j] for j in range(total_logicals) if j != logical_index
-        ]
-        mi_summary = get_entanglement_info_EPR_logical(
-            spec,
-            hx_u,
-            hz_u,
-            logicals_all_z[logical_index],
-            logicals_all_dualX[logical_index],
-            logicals_z_others,
-        )
-        mi_ann_d.append(mi_summary)
-        logical_entries.append((f"ann_d_{i}", mi_summary))
-    tor1_offset = ann_d_offset + len(logicals_ann_d)
-    mi_tor1 = []
-    for i in range(len(logicals_tor1)):
-        logical_index = tor1_offset + i
-        logicals_z_others = [
-            logicals_all_z[j] for j in range(total_logicals) if j != logical_index
-        ]
-        mi_summary = get_entanglement_info_EPR_logical(
-            spec,
-            hx_u,
-            hz_u,
-            logicals_all_z[logical_index],
-            logicals_all_dualX[logical_index],
-            logicals_z_others,
-        )
-        mi_tor1.append(mi_summary)
-        logical_entries.append((f"tor1_{i}", mi_summary))
-
+        logical_entries.append((f"index {i}", mi_summary))
+        entropy_entries.append((f"index {i}", entropy_summary))
 
     print_state_tables(logical_entries)
+    print_entropy_tables(entropy_entries)
