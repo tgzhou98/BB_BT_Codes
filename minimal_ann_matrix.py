@@ -1233,6 +1233,207 @@ def verify_logical_z_equivalence(
     }
 
 
+def verify_logical_x_equivalence(
+    f_str: str,
+    g_str: str,
+    l: int,
+    m: int,
+    logicals: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Show polynomial logical Xs match css_code logical Xs up to X stabilizers."""
+
+    if logicals is None:
+        raise ValueError("X equivalence requires logicals built from the dual construction")
+
+    f_poly = sp.sympify(f_str)
+    g_poly = sp.sympify(g_str)
+    f_terms = _poly_to_exponent_pairs(f_poly, l, m)
+    g_terms = _poly_to_exponent_pairs(g_poly, l, m)
+
+    Hx, Hz = get_BB_Hx_Hz(f_terms, g_terms, l, m)
+
+    code = css_code(hx=Hx, hz=Hz, name=f"BB_{l}x{m}")
+
+    lx_matrix = code.lx.toarray().astype(np.uint8)
+
+    x_stab_sparse = mod2.row_basis(Hx)
+    x_stab_basis = x_stab_sparse.toarray().astype(np.uint8)
+    if x_stab_basis.size == 0:
+        x_stab_basis = np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+    elif x_stab_basis.ndim == 1:
+        x_stab_basis = x_stab_basis.reshape(1, -1)
+
+    x_stab_rank = x_stab_basis.shape[0] if x_stab_basis.size else 0
+
+    block1_ops = logicals["block1"]
+    block2_ops = logicals["block2"]
+    torsion_ops = logicals["torsion"]
+    tor2_details = logicals.get("tor2_details")
+
+    poly_entries = block1_ops + block2_ops + torsion_ops
+
+    def _to_matrix(entries: List[Dict[str, Any]]) -> np.ndarray:
+        if not entries:
+            return np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+        return np.vstack([entry["vector"].astype(np.uint8) for entry in entries])
+
+    def _subset_rows(matrix: np.ndarray, indices: List[int]) -> np.ndarray:
+        if not indices:
+            cols = matrix.shape[1] if matrix.ndim == 2 else Hx.shape[1]
+            return np.zeros((0, cols), dtype=np.uint8)
+        if matrix.size == 0:
+            return np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+        return matrix[np.asarray(indices, dtype=int)]
+
+    block1_matrix = _to_matrix(block1_ops)
+    block2_matrix = _to_matrix(block2_ops)
+    torsion_matrix = _to_matrix(torsion_ops)
+
+    poly_matrix = (
+        np.vstack([block1_matrix, block2_matrix, torsion_matrix])
+        if poly_entries
+        else np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+    )
+
+    css_stack = (
+        np.vstack([x_stab_basis, lx_matrix])
+        if lx_matrix.size or x_stab_basis.size
+        else np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+    )
+    poly_stack = (
+        np.vstack([x_stab_basis, poly_matrix])
+        if poly_matrix.size or x_stab_basis.size
+        else np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+    )
+
+    rank_css = mod2.rank(css_stack)
+    rank_poly = mod2.rank(poly_stack)
+    rank_union = mod2.rank(np.vstack([x_stab_basis, lx_matrix, poly_matrix]))
+
+    def _stack_with_x(matrix: np.ndarray) -> np.ndarray:
+        if matrix.size == 0:
+            return x_stab_basis.copy()
+        if x_stab_basis.size:
+            return np.vstack([x_stab_basis, matrix])
+        return matrix
+
+    tor2_matrix = (
+        tor2_details["tor_qubit_vectors"]
+        if tor2_details and tor2_details["tor_qubit_vectors"].size
+        else np.zeros((0, Hx.shape[1]), dtype=np.uint8)
+    )
+    block1_x_rank = mod2.rank(_stack_with_x(block1_matrix))
+    block2_x_rank = mod2.rank(_stack_with_x(block2_matrix))
+    block12_x_rank = mod2.rank(_stack_with_x(np.vstack([block1_matrix, block2_matrix])))
+    torsion_x_rank = mod2.rank(_stack_with_x(torsion_matrix))
+    torsion2_x_rank = mod2.rank(_stack_with_x(tor2_matrix))
+
+    ann_f_inside_idx = (
+        tor2_details.get("ann_f_in_g_indices", []) if tor2_details else []
+    )
+    ann_g_inside_idx = (
+        tor2_details.get("ann_g_in_f_indices", []) if tor2_details else []
+    )
+
+    ann_f_inside_matrix = _subset_rows(block1_matrix, ann_f_inside_idx)
+    ann_g_inside_matrix = _subset_rows(block2_matrix, ann_g_inside_idx)
+
+    selected_union_parts = [
+        x_stab_basis,
+        ann_f_inside_matrix,
+        ann_g_inside_matrix,
+        torsion_matrix,
+    ]
+    selected_union_parts = [part for part in selected_union_parts if part.size]
+    if selected_union_parts:
+        selected_union_matrix = np.vstack(selected_union_parts).astype(np.uint8)
+        selected_union_rank = mod2.rank(selected_union_matrix)
+    else:
+        selected_union_rank = 0
+
+    selected_union_matches_poly_rank = selected_union_rank == rank_poly
+
+    tor2_rank = mod2.rank(tor2_matrix) if tor2_matrix.size else 0
+    tor2_union_rank = torsion2_x_rank
+    tor2_intersection_rank = max(tor2_rank + x_stab_rank - tor2_union_rank, 0)
+
+    def in_x_stabilizer_span(vec: np.ndarray) -> bool:
+        if x_stab_basis.size == 0:
+            return not np.any(vec)
+        stacked = np.vstack([x_stab_basis, vec])
+        return mod2.rank(stacked) == mod2.rank(x_stab_basis)
+
+    matches: List[Dict[str, Any]] = []
+    unmatched_polynomial: List[Dict[str, Any]] = []
+
+    for entry in poly_entries:
+        vec = entry["vector"].astype(np.uint8)
+        found = False
+        for idx, css_vec in enumerate(lx_matrix):
+            diff = vec ^ css_vec
+            if in_x_stabilizer_span(diff):
+                matches.append(
+                    {
+                        "poly_block": entry["block"],
+                        "poly_index": entry["index"],
+                        "css_lx_index": idx,
+                    }
+                )
+                found = True
+                break
+        if not found:
+            unmatched_polynomial.append(entry)
+
+    unmatched_css = []
+    for idx, css_vec in enumerate(lx_matrix):
+        found = False
+        for entry in poly_entries:
+            diff = entry["vector"] ^ css_vec
+            if in_x_stabilizer_span(diff):
+                found = True
+                break
+        if not found:
+            unmatched_css.append(idx)
+
+    poly_not_in_css_span: List[int] = []
+    css_not_in_poly_span: List[int] = []
+
+    if css_stack.size:
+        for idx, vec in enumerate(poly_matrix):
+            stacked = np.vstack([css_stack, vec])
+            if mod2.rank(stacked) > rank_css:
+                poly_not_in_css_span.append(idx)
+
+    if poly_stack.size:
+        for idx, vec in enumerate(lx_matrix):
+            stacked = np.vstack([poly_stack, vec])
+            if mod2.rank(stacked) > rank_poly:
+                css_not_in_poly_span.append(idx)
+
+    return {
+        "matches": matches,
+        "unmatched_polynomial": unmatched_polynomial,
+        "unmatched_css": unmatched_css,
+        "poly_not_in_css_span": poly_not_in_css_span,
+        "css_not_in_poly_span": css_not_in_poly_span,
+        "rank_css_space": rank_css,
+        "rank_poly_space": rank_poly,
+        "rank_union_space": rank_union,
+        "rank_x_stabilizer": x_stab_rank,
+        "rank_block1_x_union": block1_x_rank,
+        "rank_block2_x_union": block2_x_rank,
+        "rank_block12_x_union": block12_x_rank,
+        "rank_torsion_x_union": torsion_x_rank,
+        "rank_tor2": tor2_rank,
+        "rank_tor2_x_union": tor2_union_rank,
+        "rank_tor2_x_intersection": tor2_intersection_rank,
+        "rank_selected_poly_x_union": selected_union_rank,
+        "selected_poly_x_union_matches_poly_stack": selected_union_matches_poly_rank,
+        "lx_matrix": lx_matrix,
+        "x_stabilizer_basis": x_stab_basis,
+    }
+
+
 def _express_vector_in_basis(
     target: np.ndarray,
     basis: np.ndarray,

@@ -44,7 +44,10 @@ Data/
 AGENTS.md
 
 # Jupyter file
-*.ipynb
+# *.ipynb
+
+notebook
+BB_entropy
 
 *.stim
 *.npy
