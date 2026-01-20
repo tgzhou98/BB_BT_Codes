@@ -11,6 +11,7 @@ Protocol summary (stabilizer-state method):
 
 from __future__ import annotations
 
+from ast import main
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Iterable, List, Optional, Sequence, Tuple, Union
@@ -25,6 +26,13 @@ import pytest
 from minimal_ann_theory_logicalX import orthogonalize_logical_x_matrix
 from minimal_ann_matrix import _monomial_basis, vector_to_poly
 from minimal_ann_theory_logicalX import pair_css_logicals_from_polynomials
+
+from copyreg import dispatch_table
+import enum
+from turtle import st
+from bposd.css import css_code
+from numpy import block
+from bivariate_bicycle_codes import get_BB_Hx_Hz
 
 x, y = sp.symbols("x y")
 
@@ -699,30 +707,6 @@ def apply_periodic_boundary(poly: sp.Expr, l: int, m: int) -> sp.Expr:
     return sp.expand(rem)
 
 
-__all__ = [
-    "BBCodeSpec",
-    "build_bb_stabilizers",
-    "build_bb_stabilizer_matrix",
-    "build_bb_tableau",
-    "bb_qubit_index",
-    "bb_subsystem_from_coords",
-    "bb_rectangle_subsystem",
-    "entanglement_entropy_from_stabilizer_matrix",
-    "mutual_information_from_stabilizer_matrix",
-    "coherent_information_from_stabilizer_matrix",
-    "synergy_from_stabilizer_matrix",
-    "kitaev_preskill_tee",
-    "logical_vector_from_polynomial_pair",
-    "logicals_from_polynomial_pairs",
-    "multiply_periodic",
-]
-
-from copyreg import dispatch_table
-import enum
-from turtle import st
-from bposd.css import css_code
-from numpy import block
-from bivariate_bicycle_codes import get_BB_Hx_Hz
 
 def get_entanglement_info_EPR_logical(
     spec: BBCodeSpec,
@@ -1051,8 +1035,12 @@ def print_entropy_tables(
                 f"  {s_rab:7d}  {s_a:6d}  {s_b:6d}  {s_ab:7d}"
             )
 
-if __name__ == "__main__":
+def transpose_poly(poly, l, m):
+    # p^T(x,y) = p(x^{-1}, y^{-1}) with x^{-1}=x^{l-1}, y^{-1}=y^{m-1} on the torus
+    poly_T = sp.expand(poly.subs({x: x**(l-1), y: y**(m-1)}))
+    return apply_periodic_boundary(poly_T, l, m)
 
+def main_mutual_info(l, m, a_terms, b_terms, logicals_all_z, logicals_all_dualX):
     print("BB_stab_tor module loaded.")
 
     ##################################################
@@ -1060,62 +1048,6 @@ if __name__ == "__main__":
     ##################################################
     x, y = sp.symbols("x y")
 
-    def transpose_poly(poly, l, m):
-        # p^T(x,y) = p(x^{-1}, y^{-1}) with x^{-1}=x^{l-1}, y^{-1}=y^{m-1} on the torus
-        poly_T = sp.expand(poly.subs({x: x**(l-1), y: y**(m-1)}))
-        return apply_periodic_boundary(poly_T, l, m)
-
-    print("\nl=m=6, tor case")
-    l = 6
-    m = 6
-    c_expr = sp.sympify("x**3 + y + y**2")
-    d_expr = sp.sympify("y**3 + x + x**2")
-    a_terms = [(3, 0), (0, 1), (0, 2)]
-    b_terms = [(0, 3), (1, 0), (2, 0)]
-    poly_P = sp.sympify("x**3*y**4 + x**3*y**3 + x**3*y**2 + x**3*y + y**2 + 1" )
-    poly_Q = sp.sympify("x**4*y**3 + x**3*y**3 + x**2*y**3 + x**2 + x*y**3 + 1" )
-    standard_polys = [sp.sympify("1"), sp.sympify("y"), sp.sympify("y**2"), sp.sympify("y**3"), sp.sympify("x"), sp.sympify("x*y")]
-    logicals_ann_c = [[apply_periodic_boundary(poly_P * expr, l, m), 0] for expr in standard_polys]
-    logicals_ann_d = [[0, apply_periodic_boundary(poly_Q * expr, l, m)] for expr in standard_polys]
-    poly_tor1_c_multiplier = sp.sympify("x**4 + x**3 + x*y**2 + x*y + x + y**2")
-    poly_tor1_d_multiplier = sp.sympify("x**2 + x*y + x + y**3 + y + 1")
-    standard_polys_tor = [sp.sympify("1"), sp.sympify("x"), sp.sympify("x**2"), sp.sympify("x**3")]
-    logicals_tor1 = [[apply_periodic_boundary(poly_tor1_c_multiplier * expr, l, m), apply_periodic_boundary(poly_tor1_d_multiplier * expr, l, m)] for expr in standard_polys_tor]
-
-
-    poly_P_dual = sp.sympify("x**5*y**3 + x**4*y**3 + x**2 + x*y**3 + y**3 + 1" )
-    poly_Q_dual = sp.sympify("x**3*y**5 + x**3*y**4 + x**3*y + x**3 + y**2 + 1" )
-    standard_polys = [sp.sympify("1"), sp.sympify("y"), sp.sympify("y**2"), sp.sympify("y**3"), sp.sympify("x"), sp.sympify("x*y")]
-    # standard_polys = [sp.sympify("1"), sp.sympify("y**5"), sp.sympify("y**10"), sp.sympify("y**15"), sp.sympify("x**5"), sp.sympify("x**5*y**5")]
-    logicals_ann_c_dualX = [[apply_periodic_boundary(poly_P_dual * expr, l, m), 0] for expr in standard_polys]
-    logicals_ann_d_dualX = [[0, apply_periodic_boundary(poly_Q_dual * expr, l, m)] for expr in standard_polys]
-    poly_tor1_c_multiplier_dualX = sp.sympify("x**3*y**4 + x**2*y + x + 1")
-    poly_tor1_d_multiplier_dualX = sp.sympify("x**4*y + x**3*y + x*y**5 + y**5 + y + 1")
-    standard_polys_tor_dualX = [sp.sympify("1"), sp.sympify("x"), sp.sympify("x**2"), sp.sympify("x**3")]
-    # standard_polys_tor_dualX = [sp.sympify("1"), sp.sympify("x**5"), sp.sympify("x**10"), sp.sympify("x**15")]
-    logicals_tor1_dualX = [[apply_periodic_boundary(poly_tor1_c_multiplier_dualX * expr, l, m), apply_periodic_boundary(poly_tor1_d_multiplier_dualX * expr, l, m)] for expr in standard_polys_tor_dualX]
-
-    # logicals_all_z = logicals_ann_c + logicals_ann_d + logicals_tor1
-    # logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX + logicals_tor1_dualX
-
-    # logicals_all_z = logicals_ann_c + logicals_ann_d[0:2] + logicals_tor1
-    # logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX[0:2] + logicals_tor1_dualX
-
-    logicals_all_z = logicals_ann_c + logicals_ann_d[0:2] + logicals_tor1
-    logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX[0:6] + logicals_tor1_dualX
-
-    # from minimal_ann_theory_logicalX import pair_css_logicals_from_polynomials
-
-    # paired = pair_css_logicals_from_polynomials(
-    #     f_str="x^3 + y + y^2",
-    #     g_str="y^3 + x + x^2",
-    #     l=6,
-    #     m=6,
-    # )
-
-    # # Polynomial pairs (one-to-one)
-    # logicals_all_z = paired["z_polys"]
-    # logicals_all_dualX = paired["x_polys"]
 
     all_x_raw, _ = logicals_from_polynomial_pairs(logicals_all_dualX, l, m, pauli="X")
     _, all_z_raw = logicals_from_polynomial_pairs(logicals_all_z, l, m, pauli="Z")
@@ -1205,3 +1137,83 @@ if __name__ == "__main__":
 
     print_state_tables(logical_entries)
     print_entropy_tables(entropy_entries)
+
+    return logical_entries, entropy_entries
+
+#  it will be imported with * only if it’s included in __all__ (or doesn’t start with _ when __all__ is absent).
+
+# __all__ = [
+#     "BBCodeSpec",
+#     "build_bb_stabilizers",
+#     "build_bb_stabilizer_matrix",
+#     "build_bb_tableau",
+#     "bb_qubit_index",
+#     "bb_subsystem_from_coords",
+#     "bb_rectangle_subsystem",
+#     "entanglement_entropy_from_stabilizer_matrix",
+#     "mutual_information_from_stabilizer_matrix",
+#     "coherent_information_from_stabilizer_matrix",
+#     "synergy_from_stabilizer_matrix",
+#     "logical_vector_from_polynomial_pair",
+#     "logicals_from_polynomial_pairs",
+# ]
+
+
+if __name__ == "__main__":
+    print("\nl=m=6, tor case")
+    l = 6
+    m = 6
+    c_expr = sp.sympify("x**3 + y + y**2")
+    d_expr = sp.sympify("y**3 + x + x**2")
+    a_terms = [(3, 0), (0, 1), (0, 2)]
+    b_terms = [(0, 3), (1, 0), (2, 0)]
+    poly_P = sp.sympify("x**3*y**4 + x**3*y**3 + x**3*y**2 + x**3*y + y**2 + 1" )
+    poly_Q = sp.sympify("x**4*y**3 + x**3*y**3 + x**2*y**3 + x**2 + x*y**3 + 1" )
+    standard_polys = [sp.sympify("1"), sp.sympify("y"), sp.sympify("y**2"), sp.sympify("y**3"), sp.sympify("x"), sp.sympify("x*y")]
+    logicals_ann_c = [[apply_periodic_boundary(poly_P * expr, l, m), 0] for expr in standard_polys]
+    logicals_ann_d = [[0, apply_periodic_boundary(poly_Q * expr, l, m)] for expr in standard_polys]
+    poly_tor1_c_multiplier = sp.sympify("x**4 + x**3 + x*y**2 + x*y + x + y**2")
+    poly_tor1_d_multiplier = sp.sympify("x**2 + x*y + x + y**3 + y + 1")
+    standard_polys_tor = [sp.sympify("1"), sp.sympify("x"), sp.sympify("x**2"), sp.sympify("x**3")]
+    logicals_tor1 = [[apply_periodic_boundary(poly_tor1_c_multiplier * expr, l, m), apply_periodic_boundary(poly_tor1_d_multiplier * expr, l, m)] for expr in standard_polys_tor]
+
+
+    poly_P_dual = sp.sympify("x**5*y**3 + x**4*y**3 + x**2 + x*y**3 + y**3 + 1" )
+    poly_Q_dual = sp.sympify("x**3*y**5 + x**3*y**4 + x**3*y + x**3 + y**2 + 1" )
+    standard_polys = [sp.sympify("1"), sp.sympify("y"), sp.sympify("y**2"), sp.sympify("y**3"), sp.sympify("x"), sp.sympify("x*y")]
+    # standard_polys = [sp.sympify("1"), sp.sympify("y**5"), sp.sympify("y**10"), sp.sympify("y**15"), sp.sympify("x**5"), sp.sympify("x**5*y**5")]
+    logicals_ann_c_dualX = [[apply_periodic_boundary(poly_P_dual * expr, l, m), 0] for expr in standard_polys]
+    logicals_ann_d_dualX = [[0, apply_periodic_boundary(poly_Q_dual * expr, l, m)] for expr in standard_polys]
+    poly_tor1_c_multiplier_dualX = sp.sympify("x**3*y**4 + x**2*y + x + 1")
+    poly_tor1_d_multiplier_dualX = sp.sympify("x**4*y + x**3*y + x*y**5 + y**5 + y + 1")
+    standard_polys_tor_dualX = [sp.sympify("1"), sp.sympify("x"), sp.sympify("x**2"), sp.sympify("x**3")]
+    # standard_polys_tor_dualX = [sp.sympify("1"), sp.sympify("x**5"), sp.sympify("x**10"), sp.sympify("x**15")]
+    logicals_tor1_dualX = [[apply_periodic_boundary(poly_tor1_c_multiplier_dualX * expr, l, m), apply_periodic_boundary(poly_tor1_d_multiplier_dualX * expr, l, m)] for expr in standard_polys_tor_dualX]
+
+    # logicals_all_z = logicals_ann_c + logicals_ann_d + logicals_tor1
+    # logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX + logicals_tor1_dualX
+
+    # logicals_all_z = logicals_ann_c + logicals_ann_d[0:2] + logicals_tor1
+    # logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX[0:2] + logicals_tor1_dualX
+
+    logicals_all_z = logicals_ann_c + logicals_ann_d[0:2] + logicals_tor1
+    logicals_all_dualX = logicals_ann_c_dualX + logicals_ann_d_dualX[0:6] + logicals_tor1_dualX
+
+    main_mutual_info(l, m, a_terms, b_terms, logicals_all_z, logicals_all_dualX)
+
+    # from minimal_ann_theory_logicalX import pair_css_logicals_from_polynomials
+
+    # paired = pair_css_logicals_from_polynomials(
+    #     f_str="x^3 + y + y^2",
+    #     g_str="y^3 + x + x^2",
+    #     l=6,
+    #     m=6,
+    # )
+
+    # # Polynomial pairs (one-to-one)
+    # logicals_all_z = paired["z_polys"]
+    # logicals_all_dualX = paired["x_polys"]
+
+
+    # main()
+    # pass

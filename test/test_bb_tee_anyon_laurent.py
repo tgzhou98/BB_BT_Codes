@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from scipy import sparse
 
-from BB_TEE_anyon import build_stabilizer_matrix_laurent
+from BB_CMI_anyon import build_stabilizer_matrix_laurent
 
 
 def test_build_stabilizer_matrix_laurent_basic() -> None:

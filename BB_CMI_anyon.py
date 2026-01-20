@@ -134,7 +134,7 @@ def _laurent_term_string(ex: int, ey: int) -> str:
     return "*".join(parts) if parts else "1"
 
 
-def _laurent_poly_string(poly: LaurentPoly) -> str:
+def laurent_poly_string(poly: LaurentPoly) -> str:
     support = sorted(
         poly.support(), key=lambda term: (abs(term[0]) + abs(term[1]), term[0], term[1])
     )
@@ -596,28 +596,27 @@ def plot_regions(
     return fig, ax
 
 
-__all__ = [
-    "LaurentPoly",
-    "build_geometry_ABC",
-    "build_full_lattice_sites",
-    "build_site_index",
-    "build_stabilizer_matrix_laurent",
-    "cmi_from_stabilizers",
-    "conditional_mutual_information_from_stabilizer_matrix",
-    "entanglement_entropy_from_stabilizer_matrix",
-    "qubits_from_sites",
-    "plot_regions",
-]
+# __all__ = [
+#     "LaurentPoly",
+#     "build_geometry_ABC",
+#     "build_full_lattice_sites",
+#     "build_site_index",
+#     "build_stabilizer_matrix_laurent",
+#     "cmi_from_stabilizers",
+#     "conditional_mutual_information_from_stabilizer_matrix",
+#     "entanglement_entropy_from_stabilizer_matrix",
+#     "qubits_from_sites",
+#     "plot_regions",
+#     "main",
+# ]
 
-if __name__ == "__main__":
-    L = 100
+def main_CMI(f, g, L: int = 200, Lv1: int = 40, Lv2: int = 40, Lv3: int = 25, lABC: int = 40, l_list: Optional[List[int]] = None) -> None:
+    # L = 200
     omega_full = build_full_lattice_sites(L)
     # f = LaurentPoly.from_terms([(0,0),(1,0)])
     # g = LaurentPoly.from_terms([(0,0),(0,1)])
     # f = LaurentPoly.from_terms([(0,0),(1,0),(1,1)])
     # g = LaurentPoly.from_terms([(0,0),(0,1),(1,1)])
-    f = LaurentPoly.from_terms([(0,0),(1,0),(-1,3)])
-    g = LaurentPoly.from_terms([(0,0),(0,1),(3,-1)])
     # f = LaurentPoly.from_terms([(0,0),(-1,3),(-1,4)])
     # g = LaurentPoly.from_terms([(0,0),(3,-1),(4,-1)])
     stab, site_index = build_stabilizer_matrix_laurent(
@@ -625,30 +624,34 @@ if __name__ == "__main__":
     )
     # print("site index:", site_index)
     # print("Stabilizer matrix shape:", stab[2,:])
-    lABC = 18
-
-    Lv1 = lABC  
-    Lv2 = lABC
-    Lv3 = lABC - 6
-    l_list = [-6, -5, -4, -3, -2, 0, 2, 4, 6, 10, 14]
     I_AB_Cboth_list = []
     I_AB_Cedge1_list = []
     I_AB_Cedge2_list = []
+
+    # lABC = 40
+    # Lv1 = lABC  
+    # Lv2 = lABC
+    # Lv3 = lABC - 15
+    # l_list = [-6, -5, -4, -3, -2, 0, 2, 4, 6, 10, 14]
+    # l_list = [-15, -12, -8, -6, -4, -2, 0, 2, 4, 6, 8, 12, 15]
+    # l_list = [-15, -12, -8, -4, -2, 0, 2, 4, 8, 12, 15]
+    print("L =", L)
+    print(f"Lv1 ={Lv1}, Lv2 ={Lv2}, Lv3 ={Lv3}")
     for l in l_list:
         Lh1 = lABC + l
         Lh2 = lABC + l
         omega, A_sites, B_sites, C_sites, meta = build_geometry_ABC(
             Lv1, Lv2, Lv3, Lh1, Lh2, lattice_size=L
         )
-        plot_regions(
-            A_sites,
-            B_sites,
-            C_sites,
-            W=L,
-            H=L,
-            full_sites=omega_full,
-            save_path="abc_regions.png",
-        )
+        # plot_regions(
+        #     A_sites,
+        #     B_sites,
+        #     C_sites,
+        #     W=L,
+        #     H=L,
+        #     full_sites=omega_full,
+        #     save_path="abc_regions.png",
+        # )
 
         A = qubits_from_sites(A_sites, site_index, include_edge1=True, include_edge2=True)
         B = qubits_from_sites(B_sites, site_index, include_edge1=True, include_edge2=True)
@@ -670,6 +673,7 @@ if __name__ == "__main__":
         I_AB_Cedge2 = cmi_from_stabilizers(stab, A, B, C_edge2, num_qubits=n)
         # I_AB_Cedge1 = cmi_from_stabilizers(stab, A, B_edge1, C_both, num_qubits=n)
         # I_AB_Cedge2 = cmi_from_stabilizers(stab, A, B_edge2, C_both, num_qubits=n)
+        print(f"l={l}, Lh1={Lh1}, Lh2={Lh2}")
         print(r"I(A:C_{vh}|B)=", I_AB_Cboth)
         print(r"I(A:C_{v}|B)=", I_AB_Cedge1)
         print(r"I(A:C_{h}|B)=", I_AB_Cedge2)
@@ -678,15 +682,26 @@ if __name__ == "__main__":
         I_AB_Cedge1_list.append(I_AB_Cedge1)
         I_AB_Cedge2_list.append(I_AB_Cedge2)
 
-    fig, ax = plt.subplots(figsize=(6, 6))
-    ax.scatter(l_list, I_AB_Cboth_list, s=50, marker="o", color="#4f81bd", label=r"I(A:B|C_{vh})")
-    ax.scatter(l_list, I_AB_Cedge1_list, s=50, marker="o", color="#c0504d", label=r"I(A:B|C_{v})")
-    ax.scatter(l_list, I_AB_Cedge2_list, s=50, marker="o", color="#9e9e9e", label=r"I(A:B|C_{h})")
-    f_str = _laurent_poly_string(f)
-    g_str = _laurent_poly_string(g)
+    
     file_stub = f"I_AC_B_{_laurent_poly_slug(f)}_and_{_laurent_poly_slug(g)}"
-    ax.set_xlabel("l")
-    ax.set_ylabel("I(A:C|B)")
-    ax.legend(loc="upper right")
-    ax.set_title(f"{f_str} and {g_str} TEE anyon model")
-    fig.savefig(f"{file_stub}.png", dpi=200, bbox_inches="tight")
+    data = np.column_stack([l_list, I_AB_Cedge1_list, I_AB_Cedge2_list, I_AB_Cboth_list])
+    np.savetxt(
+        f"{file_stub}.csv",
+        data,
+        fmt="%d",
+        delimiter=",",
+        header="l,I_(A:Cv|B),I_(A:Ch|B),I_(A:Cvh|B)",
+        comments="",
+    )
+
+    print("l_list =", l_list)
+    print("I_(A:Cv|B)_list =", I_AB_Cedge1_list)
+    print("I_(A:Ch|B)_list =", I_AB_Cedge2_list)
+    print("I_(A:Cvh|B)_list =", I_AB_Cboth_list)
+
+    return l_list, I_AB_Cboth_list, I_AB_Cedge1_list, I_AB_Cedge2_list, file_stub
+
+
+if __name__ == "__main__":
+    main_CMI()
+    # pass
